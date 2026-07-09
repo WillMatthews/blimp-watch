@@ -5,6 +5,16 @@ matches the ray-casting logic used in the original blimp-watch.sh shell script.
 """
 from __future__ import annotations
 
+from math import asin, cos, radians, sin, sqrt
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two points, in kilometres."""
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    return 2 * 6371.0 * asin(sqrt(a))
+
 # Greater London bounding box (roughly M25-ish): (lat_min, lat_max, lon_min, lon_max)
 LONDON_BOX = (51.28, 51.70, -0.53, 0.34)
 

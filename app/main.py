@@ -14,7 +14,7 @@ import aiohttp
 from aiohttp import web
 
 from .adsb import fetch_aircraft
-from .geo import LONDON_BOX, UK_POLYGONS, classify
+from .geo import LONDON_BOX, UK_POLYGONS, classify, haversine_km
 from .notify import Notifier
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
@@ -60,12 +60,18 @@ class Service:
         persisted = self._load_persisted()
         self.presence = persisted.get("presence", "unknown")
         self.region = persisted.get("region", "unknown")  # last KNOWN region (never None)
+        # current-flight accumulators (persisted so a restart mid-flight keeps the numbers)
+        self.airborne_since = persisted.get("airborne_since")  # epoch when this flight began
+        self.dist_km = persisted.get("dist_km", 0.0)           # track distance this flight
+        self.last_pt = persisted.get("last_pt")                # [lat, lon] of last airborne fix
+        self.last_air_ts = persisted.get("last_air_ts")        # epoch of last airborne fix
         # live snapshot for the API
         self.snapshot = {
             "name": NAME, "hex": HEX, "map_url": MAP_URL,
             "presence": self.presence, "region": self.region,
             "feed_ok": False, "ts": None, "age_sec": None,
             "in_london": False, "in_uk": False, "aircraft": None,
+            "airborne_since": self.airborne_since, "dist_km": self.dist_km,
             "summary": f"{NAME}: starting up…",
         }
 
@@ -78,9 +84,37 @@ class Service:
     def _persist(self) -> None:
         try:
             STATE_DIR.mkdir(parents=True, exist_ok=True)
-            STATE_FILE.write_text(json.dumps({"presence": self.presence, "region": self.region}))
+            STATE_FILE.write_text(json.dumps({
+                "presence": self.presence, "region": self.region,
+                "airborne_since": self.airborne_since, "dist_km": self.dist_km,
+                "last_pt": self.last_pt, "last_air_ts": self.last_air_ts,
+            }))
         except Exception as e:  # noqa: BLE001
             log.warning("could not persist state: %s", e)
+
+    # Gap longer than this (seconds) means the flight ended off-radar (landed & powered
+    # down), so the next airborne fix starts a fresh flight rather than resuming.
+    FLIGHT_GAP_S = 900
+
+    def _update_flight(self, now: float, new_presence: str, ac: dict | None) -> None:
+        airborne = new_presence.startswith("airborne") and ac and ac.get("lat") is not None
+        if airborne:
+            pt = [ac["lat"], ac["lon"]]
+            resumed = self.airborne_since is not None and (
+                self.last_air_ts is None or now - self.last_air_ts <= self.FLIGHT_GAP_S)
+            if resumed:
+                if self.last_pt:
+                    self.dist_km += haversine_km(self.last_pt[0], self.last_pt[1], pt[0], pt[1])
+            else:  # start a new flight
+                self.airborne_since = now
+                self.dist_km = 0.0
+            self.last_pt = pt
+            self.last_air_ts = now
+        elif new_presence == "ground":  # confirmed down — end the flight (offline stays sticky)
+            self.airborne_since = None
+            self.dist_km = 0.0
+            self.last_pt = None
+            self.last_air_ts = None
 
     async def poll_once(self, session: aiohttp.ClientSession) -> None:
         try:
@@ -102,14 +136,17 @@ class Service:
         self.presence = new_presence
         if new_region is not None:
             self.region = new_region
-        self._persist()
 
         now = time.time()
+        self._update_flight(now, new_presence, ac)
+        self._persist()
+
         summary = summarize(new_presence, ac)
         self.snapshot.update({
             "presence": new_presence, "region": self.region, "feed_ok": feed_ok,
             "ts": now, "age_sec": 0, "in_london": cls.get("in_london", False),
             "in_uk": cls.get("in_uk", False), "aircraft": ac, "summary": summary,
+            "airborne_since": self.airborne_since, "dist_km": round(self.dist_km, 1),
         })
         if ac and ac.get("lat") is not None:
             self.history.append({

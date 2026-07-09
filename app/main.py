@@ -45,9 +45,11 @@ def summarize(presence: str, ac: dict | None) -> str:
     base = SUMMARIES.get(presence, presence)
     if not ac or ac.get("lat") is None:
         return f"{NAME}: {base}."
+    pos = f"@ {ac['lat']:.4f}, {ac['lon']:.4f}"
     alt = ac.get("alt_baro")
-    return (f"{NAME}: {base} — {alt} ft, {ac.get('gs')} kt, "
-            f"track {ac.get('track')}° @ {ac['lat']:.4f}, {ac['lon']:.4f}")
+    if alt == "ground":  # moored/taxiing — no meaningful altitude to show
+        return f"{NAME}: {base} {pos}."
+    return f"{NAME}: {base} — {alt} ft, {ac.get('gs')} kt, track {ac.get('track')}° {pos}"
 
 
 class Service:
@@ -119,15 +121,18 @@ class Service:
     async def _maybe_notify(self, session, prev_presence, prev_region,
                             new_presence, new_region, ac) -> None:
         msg = summarize(new_presence, ac)
+        # On a cold start prev_region/prev_presence are "unknown" — seed the baseline
+        # silently rather than firing a spurious "arrived"/"over London" on first poll.
         # UK border crossings — only when online (new_region not None); never on power-down.
-        if new_region == "uk" and prev_region != "uk":
+        if new_region == "uk" and prev_region == "away":
             await self.notifier.send(session, "Goodyear Blimp has arrived in the UK! 🇬🇧",
                                      msg, priority="high", tags=["airplane", "gb"], click=MAP_URL)
         elif new_region == "away" and prev_region == "uk":
             await self.notifier.send(session, "Goodyear Blimp has left the UK", msg,
                                      priority="default", tags=["airplane"], click=MAP_URL)
-        # Over London.
-        if new_presence == "airborne_london" and prev_presence != "airborne_london":
+        # Over London (fires on any genuine transition into the box, but not at cold start).
+        if (new_presence == "airborne_london"
+                and prev_presence not in (None, "unknown", "airborne_london")):
             await self.notifier.send(session, "Goodyear Blimp over London!", msg,
                                      priority="urgent", tags=["airplane", "cityscape"], click=MAP_URL)
 

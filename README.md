@@ -11,7 +11,8 @@ It replaces the old laptop shell script with a proper always-on service:
 
 - **One central poll.** The container polls the free ADS-B feeds once every `POLL_INTERVAL`
   seconds; every machine reads *its* cache instead of hammering upstream from each device.
-- **Live map** at `/` — Leaflet map with the blimp, its recent track, and the UK/London
+- **Live map** at `/` — MapLibre GL vector-tile map (basemap: [OpenFreeMap](https://openfreemap.org),
+  free & key-less) with a rotating airship silhouette, its recent track, and the UK/London
   geofences. Position comes from the local cache, so it's low-latency on your LAN.
 - **JSON API** for scripts, widgets, and other machines.
 - **Proper push** via [ntfy](https://ntfy.sh) (default), Telegram, or a generic webhook —
@@ -72,6 +73,14 @@ client/blimp
   (Northern Ireland is intentionally excluded — it's a *Great Britain* polygon.)
 
 Both live in `app/geo.py` and are served over `/api/geo`; the map draws them from there.
+
+## Map basemap
+
+The map (`app/static/index.html`) uses **MapLibre GL JS** with **OpenFreeMap** vector tiles
+(the `liberty` style) — no API key required. The viewing browser needs internet for the
+basemap tiles; the tracking/data path is fully local. To use a different basemap, change the
+`STYLE` constant at the top of the page's script (e.g. self-hosted PMTiles for a fully offline
+LAN, or a MapTiler/Stadia style with a key).
 
 ## Tests
 

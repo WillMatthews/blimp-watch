@@ -4,18 +4,20 @@
 <meta charset="utf-8">
 <title>blimp-watch — D-LZFN live</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
 <style>
   html,body{margin:0;height:100%;font-family:system-ui,sans-serif}
-  #map{height:100%}
-  #panel{position:absolute;top:10px;left:10px;z-index:1000;background:rgba(255,255,255,.94);
-    padding:12px 14px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.25);max-width:320px}
-  #panel h1{margin:0 0 4px;font-size:15px}
+  #map{position:absolute;inset:0}
+  #panel{position:absolute;top:10px;left:10px;z-index:2;background:rgba(255,255,255,.94);
+    padding:12px 14px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.25);max-width:340px}
+  #panel h1{margin:0 0 6px;font-size:15px}
   #summary{font-size:13px;color:#222;margin:6px 0}
   .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:600;color:#fff}
   .meta{font-size:11px;color:#666;margin-top:6px}
   .meta a{color:#2668c7}
+  /* the blimp marker */
+  .blimp{width:34px;height:34px;cursor:pointer;filter:drop-shadow(0 1px 1px rgba(0,0,0,.4))}
   @media (prefers-color-scheme: dark){
     #panel{background:rgba(28,28,30,.94);color:#eee}
     #summary{color:#ddd}.meta{color:#aaa}
@@ -31,62 +33,106 @@
 </div>
 <div id="map"></div>
 <script>
+const STYLE = 'https://tiles.openfreemap.org/styles/liberty';  // free vector tiles, no key
 const BADGE = {
   airborne_london:['OVER LONDON','#c0392b'], airborne_uk:['OVER THE UK','#2668c7'],
   airborne_away:['OUTSIDE UK','#8e44ad'], ground:['ON GROUND','#7f8c8d'],
   offline:['OFFLINE','#34495e'], unknown:['…','#888']
 };
 
-const map = L.map('map').setView([54,-2.5],6);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  {attribution:'© OpenStreetMap',maxZoom:19}).addTo(map);
+// top-down airship silhouette — nose points "up" (north) at 0°, then rotated to track.
+const BLIMP_SVG = `
+<svg class="blimp" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+  <!-- tail fins (cruciform) -->
+  <path d="M20 27 L11 34 L20 33 Z" fill="#c77d16"/>
+  <path d="M20 27 L29 34 L20 33 Z" fill="#c77d16"/>
+  <!-- envelope: rounded nose (top), tapered tail (bottom) -->
+  <path d="M20 3 C26 3 26.5 12 26 20 C25.6 29 23 34 20 37
+           C17 34 14.4 29 14 20 C13.5 12 14 3 20 3 Z"
+        fill="#f2a626" stroke="#7a4a05" stroke-width="1.3"/>
+  <!-- centre line + gondola -->
+  <line x1="20" y1="6" x2="20" y2="34" stroke="#7a4a05" stroke-width="0.7" opacity="0.5"/>
+  <rect x="18" y="19" width="4" height="7" rx="1.5" fill="#333"/>
+</svg>`;
 
-let marker=null, trail=null, fitted=false;
+const map = new maplibregl.Map({
+  container:'map', style:STYLE, center:[-2.5,54], zoom:5, attributionControl:true
+});
+map.addControl(new maplibregl.NavigationControl({showCompass:true}), 'top-right');
 
-async function drawGeo(){
+let marker=null, popup=null;
+
+function fc(features){ return {type:'FeatureCollection', features}; }
+function ring(latlngs){ const r = latlngs.map(([la,lo])=>[lo,la]); r.push(r[0]); return r; }
+
+map.on('load', async () => {
   const g = await (await fetch('api/geo')).json();
-  const [a,b,c,d] = g.london_box; // latMin,latMax,lonMin,lonMax
-  L.rectangle([[a,c],[b,d]],{color:'#2668c7',weight:2,fillOpacity:0.05})
-    .addTo(map).bindTooltip('London box');
-  const uk = L.polygon(g.uk_polygon,{color:'#c0392b',weight:2,fillOpacity:0.05})
-    .addTo(map).bindTooltip('UK polygon');
-  map.fitBounds(uk.getBounds().pad(0.05)); fitted=true;
-}
 
-function icon(track){
-  return L.divIcon({className:'',iconSize:[28,28],iconAnchor:[14,14],
-    html:`<div style="font-size:24px;transform:rotate(${(track||0)-45}deg)">✈️</div>`});
-}
+  // --- UK polygon ---
+  const ukRing = ring(g.uk_polygon);
+  map.addSource('uk', {type:'geojson', data:{type:'Feature', geometry:{type:'Polygon', coordinates:[ukRing]}}});
+  map.addLayer({id:'uk-fill', type:'fill', source:'uk', paint:{'fill-color':'#c0392b','fill-opacity':0.05}});
+  map.addLayer({id:'uk-line', type:'line', source:'uk', paint:{'line-color':'#c0392b','line-width':2}});
+
+  // --- London box ---
+  const [a,b,c,d] = g.london_box; // latMin,latMax,lonMin,lonMax
+  const ldn = [[c,a],[d,a],[d,b],[c,b],[c,a]];
+  map.addSource('ldn', {type:'geojson', data:{type:'Feature', geometry:{type:'Polygon', coordinates:[ldn]}}});
+  map.addLayer({id:'ldn-fill', type:'fill', source:'ldn', paint:{'fill-color':'#2668c7','fill-opacity':0.06}});
+  map.addLayer({id:'ldn-line', type:'line', source:'ldn', paint:{'line-color':'#2668c7','line-width':2}});
+
+  // --- track trail ---
+  map.addSource('trail', {type:'geojson', data:fc([])});
+  map.addLayer({id:'trail', type:'line', source:'trail',
+    paint:{'line-color':'#e67e22','line-width':2.5,'line-opacity':0.75},
+    layout:{'line-cap':'round','line-join':'round'}});
+
+  // fit to UK polygon
+  const bounds = ukRing.reduce((bb,ll)=>bb.extend(ll), new maplibregl.LngLatBounds(ukRing[0], ukRing[0]));
+  map.fitBounds(bounds, {padding:40, duration:0});
+
+  tick();
+  setInterval(tick, 2000);
+});
 
 async function tick(){
   try{
     const s = await (await fetch('api/state',{cache:'no-store'})).json();
     const [label,color] = BADGE[s.presence]||BADGE.unknown;
-    document.getElementById('badge').textContent=label;
-    document.getElementById('badge').style.background=color;
+    const badge = document.getElementById('badge');
+    badge.textContent=label; badge.style.background=color;
     document.getElementById('summary').textContent=s.summary||'';
     const age = s.age_sec==null?'—':s.age_sec+'s ago';
     document.getElementById('meta').innerHTML =
       `feed: ${s.feed_ok?'ok':'stale'} · region: ${s.region} · updated ${age}`
-      + `<br><a href="${s.map_url}" target="_blank">open on adsbexchange ↗</a>`;
+      + `<br><a href="${s.map_url}" target="_blank" rel="noopener">open on adsbexchange ↗</a>`;
 
     const ac = s.aircraft;
     if(ac && ac.lat!=null){
-      const ll=[ac.lat,ac.lon];
-      if(!marker){ marker=L.marker(ll,{icon:icon(ac.track)}).addTo(map);
-        marker.bindPopup(()=>`D-LZFN<br>${ac.alt_baro} ft · ${ac.gs} kt · ${ac.track}°`); }
-      else { marker.setLatLng(ll); marker.setIcon(icon(ac.track)); }
+      const ll=[ac.lon, ac.lat];
+      if(!marker){
+        const el=document.createElement('div');
+        el.innerHTML=BLIMP_SVG;
+        marker=new maplibregl.Marker({element:el, rotationAlignment:'map'}).setLngLat(ll).addTo(map);
+        popup=new maplibregl.Popup({offset:20, closeButton:false});
+        el.addEventListener('click',()=>{
+          popup.setLngLat(marker.getLngLat())
+            .setHTML(`<b>D-LZFN</b><br>${ac.alt_baro} ft · ${ac.gs} kt · ${ac.track}°`).addTo(map);
+        });
+      } else {
+        marker.setLngLat(ll);
+      }
+      marker.setRotation(ac.track||0);
     }
-    // trail from history
+
     const hist = await (await fetch('api/history',{cache:'no-store'})).json();
-    const pts = hist.filter(h=>h.lat!=null).map(h=>[h.lat,h.lon]);
-    if(pts.length>1){ if(trail) trail.setLatLngs(pts);
-      else trail=L.polyline(pts,{color:'#e67e22',weight:2,opacity:0.7}).addTo(map); }
+    const pts = hist.filter(h=>h.lat!=null).map(h=>[h.lon,h.lat]);
+    if(map.getSource('trail')){
+      map.getSource('trail').setData(pts.length>1
+        ? fc([{type:'Feature', geometry:{type:'LineString', coordinates:pts}}]) : fc([]));
+    }
   }catch(e){ document.getElementById('summary').textContent='service unreachable — retrying…'; }
 }
-
-drawGeo().then(tick);
-setInterval(tick, 2000);
 </script>
 </body>
 </html>

@@ -12,6 +12,13 @@
   #panel{position:absolute;top:10px;left:10px;z-index:2;background:rgba(255,255,255,.95);
     padding:13px 15px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.28);width:270px}
   #panel h1{margin:0;font-size:15px}
+  .hdr{display:flex;justify-content:space-between;align-items:center}
+  .follow{font-size:11px;opacity:.7;cursor:pointer;user-select:none}
+  .follow input{vertical-align:-1px;margin-right:2px}
+  #spark{display:none;margin-top:8px;overflow:visible}
+  #spark .sl{fill:none;stroke:#e67e22;stroke-width:1.5}
+  #spark .sd{fill:#e67e22}
+  #spark text{font-size:9px;fill:currentColor;opacity:.55}
   .ident{font-size:11px;opacity:.6;margin:1px 0 8px}
   .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;font-weight:600;color:#fff}
   #summary{font-size:12.5px;margin:8px 0 4px;line-height:1.35}
@@ -31,11 +38,15 @@
 </head>
 <body>
 <div id="panel">
-  <h1>🛩️ blimp-watch</h1>
+  <div class="hdr">
+    <h1>🛩️ blimp-watch</h1>
+    <label class="follow"><input type="checkbox" id="follow"> follow</label>
+  </div>
   <div class="ident" id="ident">D-LZFN · Zeppelin NT</div>
   <div><span id="badge" class="badge" style="background:#888">…</span></div>
   <div id="summary">connecting…</div>
   <div class="grid" id="details"></div>
+  <svg id="spark" width="238" height="34"></svg>
   <div class="meta" id="meta"></div>
 </div>
 <div id="map"></div>
@@ -46,6 +57,10 @@ const BADGE = {
   airborne_london:['OVER LONDON','#c0392b'], airborne_uk:['OVER THE UK','#2668c7'],
   airborne_away:['OUTSIDE UK','#8e44ad'], ground:['ON GROUND','#7f8c8d'],
   offline:['OFFLINE','#34495e'], unknown:['…','#888']
+};
+const TITLES = {
+  airborne_london:'🛩️ Over London', airborne_uk:'🛩️ Over the UK', airborne_away:'🛩️ Outside UK',
+  ground:'⚓ On the ground', offline:'💤 Offline', unknown:'…'
 };
 const COMPASS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
 
@@ -79,10 +94,32 @@ function fmtDur(sec){
   return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`;
 }
 
+function renderSpark(hist){
+  const el=document.getElementById('spark');
+  const N=hist.filter(h=>typeof h.alt==='number').slice(-60);
+  if(N.length<2){ el.style.display='none'; return; }
+  const W=238,H=34,L=26,pad=3;               // L = left gutter for hi/lo labels
+  const alts=N.map(p=>p.alt), lo=Math.min(...alts), hi=Math.max(...alts), rng=(hi-lo)||1;
+  const x=i=> L + i*(W-L-pad)/(N.length-1);
+  const y=a=> pad + (H-2*pad)*(1-(a-lo)/rng);
+  const d=N.map((p,i)=>`${i?'L':'M'}${x(i).toFixed(1)} ${y(p.alt).toFixed(1)}`).join(' ');
+  el.innerHTML =
+    `<path class="sl" d="${d}"/>`+
+    `<circle class="sd" cx="${x(N.length-1).toFixed(1)}" cy="${y(N[N.length-1].alt).toFixed(1)}" r="2"/>`+
+    `<text x="0" y="8">${hi}ft</text><text x="0" y="${H-2}">${lo}ft</text>`;
+  el.style.display='block';
+}
+
 function renderDetails(s){
   const el=document.getElementById('details'), ac=s.aircraft, rows=[];
-  if(!ac || ac.lat==null){ el.innerHTML = kv('Status', s.presence==='offline'
-    ? 'transponder off / out of range' : '—'); return; }
+  if(!ac || ac.lat==null){
+    if(s.last_ac && s.last_seen_ts && s.ts){
+      rows.push(kv('Status','transponder off'));
+      rows.push(kv('Last seen', fmtDur(s.ts - s.last_seen_ts)+' ago'));
+      rows.push(kv('Last pos', `${s.last_ac.lat.toFixed(3)}, ${s.last_ac.lon.toFixed(3)}`));
+    } else { rows.push(kv('Status','—')); }
+    el.innerHTML = rows.join(''); return;
+  }
   const alt=ac.alt_baro;
   if(alt==='ground'){
     rows.push(kv('Status','moored / taxiing'));
@@ -112,7 +149,7 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl({showCompass:true}), 'top-right');
 
-let marker=null, popup=null;
+let marker=null, markerEl=null, popup=null, cur=null;
 function fc(features){ return {type:'FeatureCollection', features}; }
 function ring(latlngs){ const r = latlngs.map(([la,lo])=>[lo,la]); r.push(r[0]); return r; }
 
@@ -153,28 +190,35 @@ async function tick(){
     document.getElementById('ident').textContent =
       (ac && ac.r ? ac.r : 'D-LZFN') + ' · ' + (ac && ac.desc ? ac.desc : 'Zeppelin NT');
     document.getElementById('summary').textContent = s.summary||'';
+    document.title = (TITLES[s.presence]||'blimp-watch') + ' · blimp-watch';
     renderDetails(s);
     const age = s.age_sec==null?'—':s.age_sec+'s ago';
     document.getElementById('meta').innerHTML =
       `feed ${s.feed_ok?'ok':'stale'} · region ${s.region} · updated ${age}`
       + ` · <a href="${s.map_url}" target="_blank" rel="noopener">adsbexchange ↗</a>`;
 
-    if(ac && ac.lat!=null){
-      const ll=[ac.lon, ac.lat];
+    // show the live fix, or fall back to the last-known position (faded) when offline
+    const live = !!(ac && ac.lat!=null);
+    const shown = live ? ac : (s.last_ac && s.last_ac.lat!=null ? s.last_ac : null);
+    cur = shown;
+    if(shown){
+      const ll=[shown.lon, shown.lat];
       if(!marker){
-        const el=document.createElement('div');
-        el.innerHTML=BLIMP_SVG;
-        marker=new maplibregl.Marker({element:el, rotationAlignment:'map'}).setLngLat(ll).addTo(map);
+        markerEl=document.createElement('div');
+        markerEl.innerHTML=BLIMP_SVG;
+        marker=new maplibregl.Marker({element:markerEl, rotationAlignment:'map'}).setLngLat(ll).addTo(map);
         popup=new maplibregl.Popup({offset:22, closeButton:false});
-        el.addEventListener('click',()=>{
+        markerEl.addEventListener('click',()=>{
+          if(!cur) return;
           popup.setLngLat(marker.getLngLat())
-            .setHTML(`<b>D-LZFN</b> — Goodyear Blimp<br>${ac.alt_baro} ft · ${ac.gs} kt · ${Math.round(ac.track)}°`)
+            .setHTML(`<b>D-LZFN</b> — Goodyear Blimp<br>${cur.alt_baro} ft · ${cur.gs} kt · ${Math.round(cur.track)}°`)
             .addTo(map);
         });
-      } else {
-        marker.setLngLat(ll);
-      }
-      marker.setRotation(ac.track||0);
+      } else { marker.setLngLat(ll); }
+      marker.setRotation(shown.track||0);
+      markerEl.style.opacity = live ? '1' : '0.4';
+      markerEl.title = live ? '' : 'last known position';
+      if(document.getElementById('follow').checked) map.easeTo({center:ll, duration:700});
     }
 
     const hist = await (await fetch('api/history',{cache:'no-store'})).json();
@@ -183,6 +227,7 @@ async function tick(){
       map.getSource('trail').setData(pts.length>1
         ? fc([{type:'Feature', geometry:{type:'LineString', coordinates:pts}}]) : fc([]));
     }
+    renderSpark(hist);
   }catch(e){ document.getElementById('summary').textContent='service unreachable — retrying…'; }
 }
 </script>

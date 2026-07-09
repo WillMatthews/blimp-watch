@@ -1,5 +1,7 @@
 # blimp-watch
 
+![ci](https://github.com/WillMatthews/blimp-watch/actions/workflows/ci.yml/badge.svg)
+
 A tiny self-hosted service that tracks the **Goodyear Blimp Europe** — Zeppelin NT
 **D-LZFN** (ICAO hex `3F232B`) — over the UK, and pushes you a notification when it:
 
@@ -12,8 +14,10 @@ It replaces the old laptop shell script with a proper always-on service:
 - **One central poll.** The container polls the free ADS-B feeds once every `POLL_INTERVAL`
   seconds; every machine reads *its* cache instead of hammering upstream from each device.
 - **Live map** at `/` — MapLibre GL vector-tile map (basemap: [OpenFreeMap](https://openfreemap.org),
-  free & key-less) with a rotating airship silhouette, its recent track, and the UK/London
-  geofences. Position comes from the local cache, so it's low-latency on your LAN.
+  free & key-less) with a rotating airship silhouette, its recent track, an altitude sparkline,
+  a follow toggle, and the UK/London geofences. When the blimp powers its transponder down,
+  the marker fades and shows its **last-known position** ("last seen 3h ago") instead of vanishing.
+  Position comes from the local cache, so it's low-latency on your LAN.
 - **JSON API** for scripts, widgets, and other machines.
 - **Proper push** via [ntfy](https://ntfy.sh) (default), Telegram, or a generic webhook —
   reaches your phone from anywhere, no dependence on a laptop being awake.

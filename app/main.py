@@ -14,7 +14,7 @@ import aiohttp
 from aiohttp import web
 
 from .adsb import fetch_aircraft
-from .geo import LONDON_BOX, UK_POLYGON, classify
+from .geo import LONDON_BOX, UK_POLYGONS, classify
 from .notify import Notifier
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
@@ -166,7 +166,7 @@ async def handle_history(request: web.Request) -> web.Response:
 
 
 async def handle_geo(request: web.Request) -> web.Response:
-    return web.json_response({"london_box": LONDON_BOX, "uk_polygon": UK_POLYGON})
+    return web.json_response({"london_box": LONDON_BOX, "uk_polygons": UK_POLYGONS})
 
 
 async def handle_health(request: web.Request) -> web.Response:

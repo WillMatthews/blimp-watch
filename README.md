@@ -68,9 +68,10 @@ client/blimp
 ## Geofences
 
 - **London**: bounding box 51.28–51.70 N, −0.53–0.34 E (roughly the M25).
-- **UK**: a coarse Great Britain polygon whose southern edge runs down the middle of the
-  English Channel, so France, Belgium, the Netherlands and Ireland fall outside.
-  (Northern Ireland is intentionally excluded — it's a *Great Britain* polygon.)
+- **UK**: a **MultiPolygon** — a coarse Great Britain outline (southern edge down the middle
+  of the English Channel) **plus a Northern Ireland outline**. A point counts as UK if it's
+  inside either. France, Belgium, the Netherlands and the **Republic of Ireland** (Dublin,
+  Donegal, Sligo, Monaghan…) all fall outside. The NI land border is approximate.
 
 Both live in `app/geo.py` and are served over `/api/geo`; the map draws them from there.
 

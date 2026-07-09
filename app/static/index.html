@@ -68,9 +68,10 @@ function ring(latlngs){ const r = latlngs.map(([la,lo])=>[lo,la]); r.push(r[0]);
 map.on('load', async () => {
   const g = await (await fetch('api/geo')).json();
 
-  // --- UK polygon ---
-  const ukRing = ring(g.uk_polygon);
-  map.addSource('uk', {type:'geojson', data:{type:'Feature', geometry:{type:'Polygon', coordinates:[ukRing]}}});
+  // --- UK MultiPolygon (Great Britain + Northern Ireland) ---
+  const ukRings = g.uk_polygons.map(p => [ring(p)]);   // [[ring],[ring]] per polygon
+  map.addSource('uk', {type:'geojson', data:{type:'Feature',
+    geometry:{type:'MultiPolygon', coordinates:ukRings}}});
   map.addLayer({id:'uk-fill', type:'fill', source:'uk', paint:{'fill-color':'#c0392b','fill-opacity':0.05}});
   map.addLayer({id:'uk-line', type:'line', source:'uk', paint:{'line-color':'#c0392b','line-width':2}});
 
@@ -87,8 +88,9 @@ map.on('load', async () => {
     paint:{'line-color':'#e67e22','line-width':2.5,'line-opacity':0.75},
     layout:{'line-cap':'round','line-join':'round'}});
 
-  // fit to UK polygon
-  const bounds = ukRing.reduce((bb,ll)=>bb.extend(ll), new maplibregl.LngLatBounds(ukRing[0], ukRing[0]));
+  // fit to the whole UK MultiPolygon
+  const flat = ukRings.flatMap(poly => poly[0]); // all [lon,lat] vertices across both rings
+  const bounds = flat.reduce((bb,ll)=>bb.extend(ll), new maplibregl.LngLatBounds(flat[0], flat[0]));
   map.fitBounds(bounds, {padding:40, duration:0});
 
   tick();

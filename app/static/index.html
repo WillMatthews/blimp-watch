@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>blimp-watch — D-LZFN live</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html,body{margin:0;height:100%;font-family:system-ui,sans-serif}
+  #map{height:100%}
+  #panel{position:absolute;top:10px;left:10px;z-index:1000;background:rgba(255,255,255,.94);
+    padding:12px 14px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.25);max-width:320px}
+  #panel h1{margin:0 0 4px;font-size:15px}
+  #summary{font-size:13px;color:#222;margin:6px 0}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:600;color:#fff}
+  .meta{font-size:11px;color:#666;margin-top:6px}
+  .meta a{color:#2668c7}
+  @media (prefers-color-scheme: dark){
+    #panel{background:rgba(28,28,30,.94);color:#eee}
+    #summary{color:#ddd}.meta{color:#aaa}
+  }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>🛩️ blimp-watch — D-LZFN</h1>
+  <div><span id="badge" class="badge" style="background:#888">…</span></div>
+  <div id="summary">connecting…</div>
+  <div class="meta" id="meta"></div>
+</div>
+<div id="map"></div>
+<script>
+const BADGE = {
+  airborne_london:['OVER LONDON','#c0392b'], airborne_uk:['OVER THE UK','#2668c7'],
+  airborne_away:['OUTSIDE UK','#8e44ad'], ground:['ON GROUND','#7f8c8d'],
+  offline:['OFFLINE','#34495e'], unknown:['…','#888']
+};
+
+const map = L.map('map').setView([54,-2.5],6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {attribution:'© OpenStreetMap',maxZoom:19}).addTo(map);
+
+let marker=null, trail=null, fitted=false;
+
+async function drawGeo(){
+  const g = await (await fetch('api/geo')).json();
+  const [a,b,c,d] = g.london_box; // latMin,latMax,lonMin,lonMax
+  L.rectangle([[a,c],[b,d]],{color:'#2668c7',weight:2,fillOpacity:0.05})
+    .addTo(map).bindTooltip('London box');
+  const uk = L.polygon(g.uk_polygon,{color:'#c0392b',weight:2,fillOpacity:0.05})
+    .addTo(map).bindTooltip('UK polygon');
+  map.fitBounds(uk.getBounds().pad(0.05)); fitted=true;
+}
+
+function icon(track){
+  return L.divIcon({className:'',iconSize:[28,28],iconAnchor:[14,14],
+    html:`<div style="font-size:24px;transform:rotate(${(track||0)-45}deg)">✈️</div>`});
+}
+
+async function tick(){
+  try{
+    const s = await (await fetch('api/state',{cache:'no-store'})).json();
+    const [label,color] = BADGE[s.presence]||BADGE.unknown;
+    document.getElementById('badge').textContent=label;
+    document.getElementById('badge').style.background=color;
+    document.getElementById('summary').textContent=s.summary||'';
+    const age = s.age_sec==null?'—':s.age_sec+'s ago';
+    document.getElementById('meta').innerHTML =
+      `feed: ${s.feed_ok?'ok':'stale'} · region: ${s.region} · updated ${age}`
+      + `<br><a href="${s.map_url}" target="_blank">open on adsbexchange ↗</a>`;
+
+    const ac = s.aircraft;
+    if(ac && ac.lat!=null){
+      const ll=[ac.lat,ac.lon];
+      if(!marker){ marker=L.marker(ll,{icon:icon(ac.track)}).addTo(map);
+        marker.bindPopup(()=>`D-LZFN<br>${ac.alt_baro} ft · ${ac.gs} kt · ${ac.track}°`); }
+      else { marker.setLatLng(ll); marker.setIcon(icon(ac.track)); }
+    }
+    // trail from history
+    const hist = await (await fetch('api/history',{cache:'no-store'})).json();
+    const pts = hist.filter(h=>h.lat!=null).map(h=>[h.lat,h.lon]);
+    if(pts.length>1){ if(trail) trail.setLatLngs(pts);
+      else trail=L.polyline(pts,{color:'#e67e22',weight:2,opacity:0.7}).addTo(map); }
+  }catch(e){ document.getElementById('summary').textContent='service unreachable — retrying…'; }
+}
+
+drawGeo().then(tick);
+setInterval(tick, 2000);
+</script>
+</body>
+</html>

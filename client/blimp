@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# blimp — ask the blimp-watch service (the cache) where D-LZFN is.
+# Set BLIMP_WATCH_URL to your home server, e.g. export BLIMP_WATCH_URL=http://homeserver:8080
+set -euo pipefail
+URL="${BLIMP_WATCH_URL:-http://localhost:8080}"
+curl -fsS --max-time 10 "$URL/api/state" | jq -r '
+  "\(.summary)\n  presence: \(.presence)  ·  region: \(.region)  ·  feed: \(if .feed_ok then "ok" else "stale" end)  ·  updated \(.age_sec // "?")s ago\n  map: \(.map_url)"'
